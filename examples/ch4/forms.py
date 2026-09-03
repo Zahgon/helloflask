@@ -1,10 +1,11 @@
-from flask_wtf import FlaskForm
 from wtforms import StringField, PasswordField, BooleanField, IntegerField, SubmitField
 from wtforms.validators import DataRequired, Length, ValidationError
 
+from helpers import BaseForm
+
 
 # basic form example
-class LoginForm(FlaskForm):
+class LoginForm(BaseForm):
     username = StringField('Username', validators=[DataRequired()])
     password = PasswordField('Password', validators=[DataRequired(), Length(8, 128)])
     remember = BooleanField('Remember me')
@@ -12,7 +13,7 @@ class LoginForm(FlaskForm):
 
 
 # custom validator
-class FortyTwoForm(FlaskForm):
+class FortyTwoForm(BaseForm):
     answer = IntegerField('The Number')
     submit = SubmitField()
 

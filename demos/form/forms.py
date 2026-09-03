@@ -5,16 +5,17 @@
     :copyright: © 2018 Grey Li
     :license: MIT, see LICENSE for more details.
 """
-from flask_ckeditor import CKEditorField
-from flask_wtf import FlaskForm
-from flask_wtf.file import FileField, FileRequired, FileAllowed
 from wtforms import StringField, PasswordField, BooleanField, IntegerField, \
     TextAreaField, SubmitField, MultipleFileField
+from wtforms.fields import FileField
 from wtforms.validators import DataRequired, Length, ValidationError, Email
+
+from ckeditor import CKEditorField
+from helpers import BaseForm, FileAllowed, FileRequired
 
 
 # 4.2.1 basic form example
-class LoginForm(FlaskForm):
+class LoginForm(BaseForm):
     username = StringField('Username', validators=[DataRequired()])
     password = PasswordField('Password', validators=[DataRequired(), Length(8, 128)])
     remember = BooleanField('Remember me')
@@ -22,7 +23,7 @@ class LoginForm(FlaskForm):
 
 
 # custom validator
-class FortyTwoForm(FlaskForm):
+class FortyTwoForm(BaseForm):
     answer = IntegerField('The Number')
     submit = SubmitField()
 
@@ -32,45 +33,45 @@ class FortyTwoForm(FlaskForm):
 
 
 # upload form
-class UploadForm(FlaskForm):
+class UploadForm(BaseForm):
     photo = FileField('Upload Image', validators=[FileRequired(), FileAllowed(['jpg', 'jpeg', 'png', 'gif'])])
     submit = SubmitField()
 
 
 # multiple files upload form
-class MultiUploadForm(FlaskForm):
+class MultiUploadForm(BaseForm):
     photo = MultipleFileField('Upload Image', validators=[DataRequired()])
     submit = SubmitField()
 
 
 # multiple submit button
-class NewPostForm(FlaskForm):
+class NewPostForm(BaseForm):
     title = StringField('Title', validators=[DataRequired(), Length(1, 50)])
     body = TextAreaField('Body', validators=[DataRequired()])
     save = SubmitField('Save')
     publish = SubmitField('Publish')
 
 
-class SigninForm(FlaskForm):
+class SigninForm(BaseForm):
     username = StringField('Username', validators=[DataRequired(), Length(1, 20)])
     password = PasswordField('Password', validators=[DataRequired(), Length(8, 128)])
     submit1 = SubmitField('Sign in')
 
 
-class RegisterForm(FlaskForm):
+class RegisterForm(BaseForm):
     username = StringField('Username', validators=[DataRequired(), Length(1, 20)])
     email = StringField('Email', validators=[DataRequired(), Email(), Length(1, 254)])
     password = PasswordField('Password', validators=[DataRequired(), Length(8, 128)])
     submit2 = SubmitField('Register')
 
 
-class SigninForm2(FlaskForm):
+class SigninForm2(BaseForm):
     username = StringField('Username', validators=[DataRequired(), Length(1, 24)])
     password = PasswordField('Password', validators=[DataRequired(), Length(8, 128)])
     submit = SubmitField()
 
 
-class RegisterForm2(FlaskForm):
+class RegisterForm2(BaseForm):
     username = StringField('Username', validators=[DataRequired(), Length(1, 24)])
     email = StringField('Email', validators=[DataRequired(), Email(), Length(1, 254)])
     password = PasswordField('Password', validators=[DataRequired(), Length(8, 128)])
@@ -78,7 +79,7 @@ class RegisterForm2(FlaskForm):
 
 
 # CKEditor Form
-class RichTextForm(FlaskForm):
+class RichTextForm(BaseForm):
     title = StringField('Title', validators=[DataRequired(), Length(1, 50)])
     body = CKEditorField('Body', validators=[DataRequired()])
     submit = SubmitField('Publish')

@@ -5,17 +5,23 @@ from pathlib import Path
 from typing import Optional
 
 import click
-from flask import Flask, redirect, url_for, render_template, flash, request
-from flask_sqlalchemy import SQLAlchemy
-from sqlalchemy import select, String, Text, MetaData
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
-from flask_wtf import FlaskForm
+from faker import Faker
+from fastapi import Depends, FastAPI, Request
+from fastapi.responses import RedirectResponse
+from fastapi.staticfiles import StaticFiles
+from sqlalchemy import select, String, Text, MetaData, create_engine
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
+from sqlalchemy.pool import StaticPool
+from starlette.middleware.sessions import SessionMiddleware
 from wtforms import SubmitField, StringField, TextAreaField
 from wtforms.validators import DataRequired, Length
-from faker import Faker
+
+from helpers import BaseForm, create_form, flash, render_template, url_for
 
 SQLITE_PREFIX = 'sqlite:///' if sys.platform.startswith('win') else 'sqlite:////'
 SQLITE_PATH = Path(__file__).resolve().parent / 'data.db'
+BASE_DIR = Path(__file__).resolve().parent
+SECRET_KEY = os.getenv('SECRET_KEY', 'secret string')
 
 
 class Base(DeclarativeBase):
@@ -28,14 +34,36 @@ class Base(DeclarativeBase):
     })
 
 
-app = Flask(__name__)
-app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'secret string')
-app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL', SQLITE_PREFIX + str(SQLITE_PATH))
-db = SQLAlchemy(app, model_class=Base)
+def create_db_engine(url):
+    """Create the database engine with SQLite friendly defaults."""
+    options = {}
+    if url.startswith('sqlite'):
+        options['connect_args'] = {'check_same_thread': False}
+        if ':memory:' in url or url.endswith('sqlite://'):
+            options['poolclass'] = StaticPool
+    return create_engine(url, **options)
+
+
+app = FastAPI()
+app.state.config = config = {
+    'SECRET_KEY': SECRET_KEY,
+    'SQLALCHEMY_DATABASE_URI': os.getenv('DATABASE_URL', SQLITE_PREFIX + str(SQLITE_PATH)),
+}
+app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY)
+app.mount('/static', StaticFiles(directory=BASE_DIR / 'static', check_dir=False), name='static')
+
+engine = create_db_engine(config['SQLALCHEMY_DATABASE_URI'])
+Session = sessionmaker(bind=engine)
+
+
+def get_session():
+    """Provide a database session for the duration of the request."""
+    with Session() as session:
+        yield session
 
 
 # models
-class Note(db.Model):
+class Note(Base):
     __tablename__ = 'note'
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -49,7 +77,12 @@ class Note(db.Model):
 
 
 # commands
-@app.cli.command('init')
+@click.group()
+def cli():
+    """Manage the application."""
+
+
+@cli.command('init')
 @click.option('--drop-table', is_flag=True, help='Re-create the tables.')
 def init_command(drop_table):
     """Initialize the application."""
@@ -58,91 +91,96 @@ def init_command(drop_table):
             'This operation will delete the tables, do you want to continue?',
             abort=True
         )
-        db.drop_all()
+        Base.metadata.drop_all(engine)
         click.echo('Dropped tables.')
-    db.create_all()
+    Base.metadata.create_all(engine)
     click.echo('Initialized.')
 
 
-@app.cli.command('lorem')
+@cli.command('lorem')
 @click.option('--count', default=20, help='Quantity of notes, default is 20.')
 def lorem_command(count):
     """Generate fake data."""
-    db.drop_all()
-    db.create_all()
+    Base.metadata.drop_all(engine)
+    Base.metadata.create_all(engine)
 
     fake = Faker()
 
-    for _ in range(count):
-        note = Note(
-            title=fake.sentence(5),
-            body=fake.text(200),
-            created_at=fake.date_time_this_year(),
-        )
-        db.session.add(note)
+    with Session() as session:
+        for _ in range(count):
+            note = Note(
+                title=fake.sentence(5),
+                body=fake.text(200),
+                created_at=fake.date_time_this_year(),
+            )
+            session.add(note)
 
-    db.session.commit()
+        session.commit()
     click.echo(f'Created {count} notes.')
 
 
 # forms
-class NoteForm(FlaskForm):
+class NoteForm(BaseForm):
     title = StringField('Title', validators=[DataRequired(), Length(1, 50)])
     body = TextAreaField('Body', validators=[DataRequired()])
     submit = SubmitField()
 
 
-class DeleteNoteForm(FlaskForm):
+class DeleteNoteForm(BaseForm):
     submit = SubmitField('Delete')
 
 
 # views
-@app.route('/')
-def index():
-    notes = db.session.scalars(select(Note)).all()
-    delete_form = DeleteNoteForm()
-    return render_template('index.html', notes=notes, delete_form=delete_form)
+@app.get('/')
+async def index(request: Request, db_session=Depends(get_session)):
+    notes = db_session.scalars(select(Note)).all()
+    delete_form = await create_form(request, DeleteNoteForm)
+    return render_template(request, 'index.html', notes=notes, delete_form=delete_form)
 
 
-@app.route('/new', methods=['GET', 'POST'])
-def new_note():
-    form = NoteForm()
+@app.api_route('/new', methods=['GET', 'POST'])
+async def new_note(request: Request, db_session=Depends(get_session)):
+    form = await create_form(request, NoteForm)
     if form.validate_on_submit():
         title = form.title.data
         body = form.body.data
         note = Note(title=title, body=body)
-        db.session.add(note)
-        db.session.commit()
-        flash('Note saved.')
-        return redirect(url_for('index'))
-    return render_template('new_note.html', form=form)
+        db_session.add(note)
+        db_session.commit()
+        flash(request, 'Note saved.')
+        return RedirectResponse(url_for(request, 'index'), status_code=302)
+    return render_template(request, 'new_note.html', form=form)
 
 
-@app.route('/edit/<int:note_id>', methods=['GET', 'POST'])
-def edit_note(note_id):
-    form = NoteForm()
-    note = db.session.get(Note, note_id)
+@app.api_route('/edit/{note_id:int}', methods=['GET', 'POST'])
+async def edit_note(request: Request, note_id: int, db_session=Depends(get_session)):
+    form = await create_form(request, NoteForm)
+    note = db_session.get(Note, note_id)
     if form.validate_on_submit():
         note.title = form.title.data
         note.body = form.body.data
-        db.session.commit()
-        flash('Note updated.')
-        return redirect(url_for('index'))
+        db_session.commit()
+        flash(request, 'Note updated.')
+        return RedirectResponse(url_for(request, 'index'), status_code=302)
     if request.method == 'GET':
         # pre-fill form
         form.title.data = note.title
         form.body.data = note.body
-    return render_template('edit_note.html', form=form)
+    return render_template(request, 'edit_note.html', form=form)
 
 
-@app.route('/delete/<int:note_id>', methods=['POST'])
-def delete_note(note_id):
-    form = DeleteNoteForm()
+@app.post('/delete/{note_id:int}')
+async def delete_note(request: Request, note_id: int, db_session=Depends(get_session)):
+    form = await create_form(request, DeleteNoteForm)
     if form.validate_on_submit():
-        note = db.session.get(Note, note_id)
-        db.session.delete(note)
-        db.session.commit()
-        flash('Note deleted.')
+        note = db_session.get(Note, note_id)
+        db_session.delete(note)
+        db_session.commit()
+        flash(request, 'Note deleted.')
     else:
-        flash('Delete failed, please try again.')
-    return redirect(url_for('index'))
+        flash(request, 'Delete failed, please try again.')
+    return RedirectResponse(url_for(request, 'index'), status_code=302)
+
+
+if __name__ == '__main__':
+    cli()

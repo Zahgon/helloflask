@@ -5,10 +5,10 @@ from pathlib import Path
 from typing import Optional
 
 import click
-from flask import Flask
-from flask_sqlalchemy import SQLAlchemy
-from sqlalchemy import String, Text, MetaData, ForeignKey, Column, event
+from fastapi import FastAPI
+from sqlalchemy import String, Text, MetaData, ForeignKey, Column, Table, create_engine, event
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from sqlalchemy.pool import StaticPool
 
 SQLITE_PREFIX = 'sqlite:///' if sys.platform.startswith('win') else 'sqlite:////'
 SQLITE_PATH = Path(__file__).resolve().parent / 'data.db'
@@ -24,14 +24,26 @@ class Base(DeclarativeBase):
     })
 
 
-app = Flask(__name__)
-app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'secret string')
-app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL', SQLITE_PREFIX + str(SQLITE_PATH))
-db = SQLAlchemy(app, model_class=Base)
+def create_db_engine(url):
+    """Create the database engine with SQLite friendly defaults."""
+    options = {}
+    if url.startswith('sqlite'):
+        options['connect_args'] = {'check_same_thread': False}
+        if ':memory:' in url or url.endswith('sqlite://'):
+            options['poolclass'] = StaticPool
+    return create_engine(url, **options)
+
+
+app = FastAPI()
+app.state.config = config = {
+    'SECRET_KEY': os.getenv('SECRET_KEY', 'secret string'),
+    'SQLALCHEMY_DATABASE_URI': os.getenv('DATABASE_URL', SQLITE_PREFIX + str(SQLITE_PATH)),
+}
+engine = create_db_engine(config['SQLALCHEMY_DATABASE_URI'])
 
 
 # models
-class Note(db.Model):
+class Note(Base):
     __tablename__ = 'note'
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -45,7 +57,7 @@ class Note(db.Model):
 
 
 # one to many / many to one
-class Author(db.Model):
+class Author(Base):
     __tablename__ = 'author'
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -58,7 +70,7 @@ class Author(db.Model):
         return f'<Author {self.id}: {self.name}>'
 
 
-class Article(db.Model):
+class Article(Base):
     __tablename__ = 'article'
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -73,7 +85,7 @@ class Article(db.Model):
 
 
 # one to one
-class Country(db.Model):
+class Country(Base):
     __tablename__ = 'country'
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -85,7 +97,7 @@ class Country(db.Model):
         return f'<Country {self.id}: {self.name}>'
 
 
-class Capital(db.Model):
+class Capital(Base):
     __tablename__ = 'capital'
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -99,14 +111,15 @@ class Capital(db.Model):
 
 
 # many to many
-student_teacher = db.Table(
+student_teacher = Table(
     'student_teacher',
+    Base.metadata,
     Column('student_id', ForeignKey('student.id'), primary_key=True),
     Column('teacher_id', ForeignKey('teacher.id'), primary_key=True)
 )
 
 
-class Student(db.Model):
+class Student(Base):
     __tablename__ = 'student'
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -122,7 +135,7 @@ class Student(db.Model):
         return f'<Student {self.id}: {self.name}>'
 
 
-class Teacher(db.Model):
+class Teacher(Base):
     __tablename__ = 'teacher'
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -139,7 +152,7 @@ class Teacher(db.Model):
 
 
 # many to many with extra data
-class Collection(db.Model):
+class Collection(Base):
     __tablename__ = 'collection'
 
     user_id: Mapped[int] = mapped_column(ForeignKey('user.id'), primary_key=True)
@@ -154,7 +167,7 @@ class Collection(db.Model):
         return f'<Collection {self.user_id}-{self.photo_id}: {self.user.name}-{self.photo.filename}>'
 
 
-class User(db.Model):
+class User(Base):
     __tablename__ = 'user'
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -169,7 +182,7 @@ class User(db.Model):
         return f'<User {self.id}: {self.name}>'
 
 
-class Photo(db.Model):
+class Photo(Base):
     __tablename__ = 'photo'
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -185,7 +198,7 @@ class Photo(db.Model):
 
 
 # cascade and event listener
-class Post(db.Model):
+class Post(Base):
     __tablename__ = 'post'
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -199,7 +212,7 @@ class Post(db.Model):
     )
 
 
-class Comment(db.Model):
+class Comment(Base):
     __tablename__ = 'comment'
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -216,7 +229,12 @@ def increment_edited_count(target, value, oldvalue, initiator):
 
 
 # commands
-@app.cli.command('init')
+@click.group()
+def cli():
+    """Manage the application."""
+
+
+@cli.command('init')
 @click.option('--drop-table', is_flag=True, help='Re-create the tables.')
 def init_command(drop_table):
     """Initialize the application."""
@@ -225,7 +243,11 @@ def init_command(drop_table):
             'This operation will delete the tables, do you want to continue?',
             abort=True
         )
-        db.drop_all()
+        Base.metadata.drop_all(engine)
         click.echo('Dropped tables.')
-    db.create_all()
+    Base.metadata.create_all(engine)
     click.echo('Initialized.')
+
+
+if __name__ == '__main__':
+    cli()

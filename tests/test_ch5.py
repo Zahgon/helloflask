@@ -1,46 +1,45 @@
 import unittest
-import os
-import importlib.util
+
+from click.testing import CliRunner
+from starlette.testclient import TestClient
+
+from . import load_app
+
+IN_MEMORY_DB = {'DATABASE_URL': 'sqlite:///:memory:'}
+
 
 class Ch5TestCase(unittest.TestCase):
     def setUp(self):
-        # Import ch5 app specifically
-        ch5_path = os.path.join(os.path.dirname(__file__), '..', 'examples', 'ch5', 'app.py')
-        spec = importlib.util.spec_from_file_location("ch5_app", ch5_path)
-        ch5_app = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(ch5_app)
-        
+        # Import ch5 app specifically, against a throwaway in-memory database
+        ch5_app = load_app('ch5', 'ch5_app', env=IN_MEMORY_DB)
+
         self.app = ch5_app.app
-        self.db = ch5_app.db
-        self.app.config['TESTING'] = True
-        self.app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///:memory:'
-        self.client = self.app.test_client()
-        self.cli_runner = self.app.test_cli_runner()
-        
-        with self.app.app_context():
-            self.db.create_all()
+        self.base = ch5_app.Base
+        self.engine = ch5_app.engine
+        self.app.state.config['TESTING'] = True
+        self.client = TestClient(self.app)
+        self.cli = ch5_app.cli
+        self.cli_runner = CliRunner()
+
+        self.base.metadata.create_all(self.engine)
 
     def tearDown(self):
-        with self.app.app_context():
-            self.db.drop_all()
+        self.base.metadata.drop_all(self.engine)
 
     def test_app_exist(self):
         self.assertIsNotNone(self.app)
 
     def test_app_is_testing(self):
-        self.assertTrue(self.app.config['TESTING'])
+        self.assertTrue(self.app.state.config['TESTING'])
 
     def test_cli_init_command(self):
-        result = self.cli_runner.invoke(args=['init'])
+        result = self.cli_runner.invoke(self.cli, ['init'])
         self.assertIn('Initialized.', result.output)
 
     def test_database_models(self):
         # Import ch5 app specifically for models
-        ch5_path = os.path.join(os.path.dirname(__file__), '..', 'examples', 'ch5', 'app.py')
-        spec = importlib.util.spec_from_file_location("ch5_models", ch5_path)
-        ch5_models = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(ch5_models)
-        
+        ch5_models = load_app('ch5', 'ch5_models', env=IN_MEMORY_DB)
+
         # Test model creation doesn't raise errors
         self.assertIsNotNone(ch5_models.Note)
         self.assertIsNotNone(ch5_models.Author)

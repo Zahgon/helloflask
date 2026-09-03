@@ -2,17 +2,31 @@ import os
 import uuid
 from pathlib import Path
 
-from flask import Flask, render_template, flash, session, redirect, url_for, send_from_directory
-from flask_wtf import FlaskForm
+from fastapi import FastAPI, Request
+from fastapi.responses import RedirectResponse
+from fastapi.staticfiles import StaticFiles
+from starlette.middleware.sessions import SessionMiddleware
 from wtforms import SubmitField
-from flask_wtf.file import FileField, FileRequired, FileAllowed, FileSize
+from wtforms.fields import FileField
 
-app = Flask(__name__)
-app.config['UPLOAD_PATH'] = Path(app.root_path) / 'uploads'
-app.secret_key = os.getenv('SECRET_KEY', 'secret string')
+from helpers import (
+    BaseForm, FileAllowed, FileRequired, FileSize, create_form, flash, render_template,
+    save_upload, send_from_directory, url_for,
+)
+
+BASE_DIR = Path(__file__).resolve().parent
+SECRET_KEY = os.getenv('SECRET_KEY', 'secret string')
+
+app = FastAPI()
+app.state.config = config = {
+    'SECRET_KEY': SECRET_KEY,
+    'UPLOAD_PATH': BASE_DIR / 'uploads',
+}
+app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY)
+app.mount('/static', StaticFiles(directory=BASE_DIR / 'static', check_dir=False), name='static')
 
 
-class UploadPhotoForm(FlaskForm):
+class UploadPhotoForm(BaseForm):
     photo = FileField('Upload Photo', validators=[
         FileRequired(),
         FileAllowed(['jpg', 'jpeg', 'png', 'gif']),
@@ -27,24 +41,24 @@ def random_filename(origin_filename):
     return new_filename
 
 
-@app.route('/')
-def index():
-    return render_template('index.html')
+@app.get('/')
+def index(request: Request):
+    return render_template(request, 'index.html')
 
 
-@app.route('/photos/<path:filename>')
-def get_photo(filename):
-    return send_from_directory(app.config['UPLOAD_PATH'], filename)
+@app.get('/photos/{filename:path}')
+def get_photo(filename: str):
+    return send_from_directory(config['UPLOAD_PATH'], filename)
 
 
-@app.route('/upload', methods=['GET', 'POST'])
-def upload():
-    form = UploadPhotoForm()
+@app.api_route('/upload', methods=['GET', 'POST'])
+async def upload(request: Request):
+    form = await create_form(request, UploadPhotoForm)
     if form.validate_on_submit():
         photo = form.photo.data
         filename = random_filename(photo.filename)
-        photo.save(app.config['UPLOAD_PATH'] / filename)
-        flash('Upload success.')
-        session['photos'] = [filename]
-        return redirect(url_for('index'))
-    return render_template('upload.html', form=form)
+        save_upload(photo, config['UPLOAD_PATH'] / filename)
+        flash(request, 'Upload success.')
+        request.session['photos'] = [filename]
+        return RedirectResponse(url_for(request, 'index'), status_code=302)
+    return render_template(request, 'upload.html', form=form)

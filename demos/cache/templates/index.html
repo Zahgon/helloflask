@@ -1,7 +1,7 @@
 {% extends 'base.html' %}
 
 {% block content %}
-<h1>Cache</h1><small>with <a href="https://github.com/sh4nks/flask-caching">Flask-Caching</a></small>
+<h1>Cache</h1><small>with <a href="https://github.com/pallets-eco/cachelib">cachelib</a></small>
 <p>These pages use <b>time.sleep(1)</b> to simulate a poor server or heavy work.</p>
 <ul>
     <li><a href="{{ url_for('foo') }}">Foo</a>: no cache</li>

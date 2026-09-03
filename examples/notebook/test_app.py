@@ -2,44 +2,45 @@ import unittest
 import os
 os.environ['DATABASE_URL'] = 'sqlite:///:memory:'
 
+from click.testing import CliRunner
 from sqlalchemy import select, func
+from starlette.testclient import TestClient
 
-from app import app, db, Note, lorem_command, init_command
+from app import app, Base, Note, Session, engine, lorem_command, init_command
 
 
 class NotebookTestCase(unittest.TestCase):
     def setUp(self):
-        app.config.update(
+        app.state.config.update(
             TESTING=True,
-            WTF_CSRF_ENABLED=False
+            CSRF_ENABLED=False
         )
 
-        self.context = app.app_context()  # create app context
-        self.context.push()  # push context
-        self.client = app.test_client()
-        self.cli_runner = app.test_cli_runner()
+        self.client = TestClient(app)
+        self.cli_runner = CliRunner()
+        self.session = Session()
 
-        db.create_all()
+        Base.metadata.create_all(engine)
         note1 = Note(title='test note 1', body='test body 1')
         note2 = Note(title='test note 2', body='test body 2')
         note3 = Note(title='test note 3', body='test body 3')
-        db.session.add_all([note1, note2, note3])
-        db.session.commit()
+        self.session.add_all([note1, note2, note3])
+        self.session.commit()
 
     def tearDown(self):
-        db.drop_all()
-        self.context.pop()
+        self.session.close()
+        Base.metadata.drop_all(engine)
 
     def test_app_exist(self):
         self.assertFalse(app is None)
 
     def test_app_is_testing(self):
-        self.assertTrue(app.config['TESTING'])
+        self.assertTrue(app.state.config['TESTING'])
 
     def test_index_page(self):
         response = self.client.get('/')
-        data = response.get_data(as_text=True)
-        notes_count = db.session.scalar(select(func.count(Note.id)))
+        data = response.text
+        notes_count = self.session.scalar(select(func.count(Note.id)))
         self.assertIn(f'{notes_count} Notes', data)
 
     def test_create_note(self):
@@ -48,14 +49,14 @@ class NotebookTestCase(unittest.TestCase):
             data={'title': 'new note', 'body': 'hello world'},
             follow_redirects=True
         )
-        data = response.get_data(as_text=True)
+        data = response.text
         self.assertIn('Note saved.', data)
         self.assertIn('hello world', data)
 
     def test_update_note(self):
         # test pre-fill form values
         response = self.client.get('/edit/1')
-        data = response.get_data(as_text=True)
+        data = response.text
         self.assertIn('value="test note 1"', data)
 
         response = self.client.post(
@@ -63,7 +64,7 @@ class NotebookTestCase(unittest.TestCase):
             data={'title': 'updated title', 'body': 'updated body'},
             follow_redirects=True
         )
-        data = response.get_data(as_text=True)
+        data = response.text
         self.assertIn('Note updated.', data)
         self.assertIn('updated title', data)
         self.assertIn('updated body', data)
@@ -75,7 +76,7 @@ class NotebookTestCase(unittest.TestCase):
             '/delete/1',
             follow_redirects=True,
         )
-        data = response.get_data(as_text=True)
+        data = response.text
         self.assertIn('Note deleted.', data)
         self.assertNotIn('test note 1', data)
 
@@ -85,19 +86,19 @@ class NotebookTestCase(unittest.TestCase):
             data={'title': ' ', 'body': 'Hello, world.'},  # use whitespace for invalid title
             follow_redirects=True
         )
-        data = response.get_data(as_text=True)
+        data = response.text
         self.assertIn('This field is required.', data)
 
     def test_lorem_command(self):
         result = self.cli_runner.invoke(lorem_command)
         self.assertIn('Created 20 notes.', result.output)
-        note_count = db.session.scalar(select(func.count(Note.id)))
+        note_count = self.session.scalar(select(func.count(Note.id)))
         self.assertEqual(note_count, 20)
 
     def test_lorem_command_with_count(self):
         result = self.cli_runner.invoke(lorem_command, ['--count', '50'])
         self.assertIn('Created 50 notes.', result.output)
-        note_count = db.session.scalar(select(func.count(Note.id)))
+        note_count = self.session.scalar(select(func.count(Note.id)))
         self.assertEqual(note_count, 50)
 
     def test_init_command(self):

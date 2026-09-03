@@ -6,76 +6,87 @@
     :license: MIT, see LICENSE for more details.
 """
 import time
+from pathlib import Path
 
-from flask import Flask, url_for, redirect, request, flash, render_template
-from flask_caching import Cache
-from flask_debugtoolbar import DebugToolbarExtension
+from debug_toolbar.middleware import DebugToolbarMiddleware
+from fastapi import FastAPI, Request
+from fastapi.responses import RedirectResponse
+from fastapi.staticfiles import StaticFiles
+from starlette.middleware.sessions import SessionMiddleware
 
-app = Flask(__name__)
-app.jinja_env.trim_blocks = True
-app.jinja_env.lstrip_blocks = True
+from cache import Cache
+from helpers import flash, render_template, templates, url_for
 
-app.config['SECRET_KEY'] = 'dev key'
+BASE_DIR = Path(__file__).resolve().parent
+SECRET_KEY = 'dev key'
 
-app.config['CACHE_TYPE'] = 'simple'
-app.config['DEBUG_TB_INTERCEPT_REDIRECTS'] = False
+app = FastAPI()
+app.state.config = {
+    'SECRET_KEY': SECRET_KEY,
+    'CACHE_TYPE': 'simple',
+}
+app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY)
+app.mount('/static', StaticFiles(directory=BASE_DIR / 'static', check_dir=False), name='static')
+templates.env.trim_blocks = True
+templates.env.lstrip_blocks = True
 
 cache = Cache(app)
-toolbar = DebugToolbarExtension(app)
+# the redirects panel is disabled by default, like DEBUG_TB_INTERCEPT_REDIRECTS = False
+app.add_middleware(DebugToolbarMiddleware)
 
 
-@app.route('/')
-def index():
-    return render_template('index.html')
+@app.get('/')
+def index(request: Request):
+    return render_template(request, 'index.html')
 
 
-@app.route('/foo')
-def foo():
+@app.get('/foo')
+def foo(request: Request):
     time.sleep(1)
-    return render_template('foo.html')
+    return render_template(request, 'foo.html')
 
 
-@app.route('/bar')
+@app.get('/bar')
 @cache.cached(timeout=10 * 60)
-def bar():
+def bar(request: Request):
     time.sleep(1)
-    return render_template('bar.html')
+    return render_template(request, 'bar.html')
 
 
-@app.route('/baz')
+@app.get('/baz')
 @cache.cached(timeout=60 * 60)
-def baz():
+def baz(request: Request):
     time.sleep(1)
-    return render_template('baz.html')
+    return render_template(request, 'baz.html')
 
 
-@app.route('/qux')
+@app.get('/qux')
 @cache.cached(query_string=True)
-def qux():
+def qux(request: Request):
     time.sleep(1)
-    page = request.args.get('page', 1)
-    return render_template('qux.html', page=page)
+    page = request.query_params.get('page', 1)
+    return render_template(request, 'qux.html', page=page)
 
 
-@app.route('/update/bar')
-def update_bar():
-    cache.delete('view/%s' % url_for('bar'))
-    flash('Cached data for bar have been deleted.')
-    return redirect(url_for('index'))
+@app.get('/update/bar')
+def update_bar(request: Request):
+    cache.delete('view/%s' % url_for(request, 'bar'))
+    flash(request, 'Cached data for bar have been deleted.')
+    return RedirectResponse(url_for(request, 'index'), status_code=302)
 
 
-@app.route('/update/baz')
-def update_baz():
-    cache.delete('view/%s' % url_for('baz'))
-    flash('Cached data for baz have been deleted.')
-    return redirect(url_for('index'))
+@app.get('/update/baz')
+def update_baz(request: Request):
+    cache.delete('view/%s' % url_for(request, 'baz'))
+    flash(request, 'Cached data for baz have been deleted.')
+    return RedirectResponse(url_for(request, 'index'), status_code=302)
 
 
-@app.route('/update/all')
-def update_all():
+@app.get('/update/all')
+def update_all(request: Request):
     cache.clear()
-    flash('All cached data deleted.')
-    return redirect(url_for('index'))
+    flash(request, 'All cached data deleted.')
+    return RedirectResponse(url_for(request, 'index'), status_code=302)
 
 
 # cache other function

@@ -6,33 +6,44 @@
     :license: MIT, see LICENSE for more details.
 """
 import click
-from flask import Flask
+from fastapi import FastAPI
+from fastapi.responses import HTMLResponse
 
-app = Flask(__name__)
+app = FastAPI()
+app.state.config = {}
 
 
-# the minimal Flask application
-@app.route('/')
+# the minimal FastAPI application
+@app.get('/', response_class=HTMLResponse)
 def index():
     return '<h1>Hello, World!</h1>'
 
 
 # bind multiple URL for one view function
-@app.route('/hi')
-@app.route('/hello')
+@app.get('/hi', response_class=HTMLResponse)
+@app.get('/hello', response_class=HTMLResponse)
 def say_hello():
     return '<h1>Hello, Flask!</h1>'
 
 
 # dynamic route, URL variable default
-@app.route('/greet', defaults={'name': 'Programmer'})
-@app.route('/greet/<name>')
-def greet(name):
+@app.get('/greet', response_class=HTMLResponse)
+@app.get('/greet/{name}', response_class=HTMLResponse)
+def greet(name: str = 'Programmer'):
     return '<h1>Hello, %s!</h1>' % name
 
 
-# custom flask cli command
-@app.cli.command()
+# custom cli command
+@click.group()
+def cli():
+    """Manage the application."""
+
+
+@cli.command()
 def hello():
     """Just say hello."""
     click.echo('Hello, Human!')
+
+
+if __name__ == '__main__':
+    cli()
